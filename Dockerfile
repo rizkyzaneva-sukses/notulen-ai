@@ -38,8 +38,8 @@ COPY --from=builder /app/next.config.ts ./next.config.ts
 
 RUN mkdir -p /app/uploads && chown -R nextjs:nodejs /app
 USER nextjs
-EXPOSE 3000
-ENV PORT=3000
+EXPOSE 80
+ENV PORT=80
 ENV UPLOAD_DIR=/app/uploads
 
 # default: web; override with npm run worker for worker service
