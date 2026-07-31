@@ -71,7 +71,10 @@ export async function processSession(sessionId: string): Promise<void> {
       const captions = await getYoutubeCaptions(session.sourceUrl);
       if (captions.hasCaptions && captions.text) {
         transcriptText = captions.text;
-        segments = segmentsFromPlainText(captions.text);
+        // captions carry real timings; only fall back to estimates if absent
+        segments = captions.segments.length
+          ? captions.segments
+          : segmentsFromPlainText(captions.text);
         language = captions.language;
         speakers = ["Speaker A"];
         sttProvider = "youtube-captions";

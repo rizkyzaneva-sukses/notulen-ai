@@ -280,7 +280,7 @@ erDiagram
 - **STT default:** AssemblyAI Universal-3.5 Pro + speaker diarization
 - **LLM default:** Claude Sonnet 5 (`claude-sonnet-5`)
 - **Meeting Bot:** Recall.ai API (Fase 2)
-- **YouTube caption:** youtube-caption-extractor library
+- **YouTube caption:** YouTube InnerTube API (client ANDROID), tanpa dependency
 - **Loom transcript:** Loom share page scraper
 
 **Mind Map:**
