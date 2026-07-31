@@ -5,26 +5,43 @@ export interface SessionData {
   isLoggedIn: boolean;
 }
 
+function getSessionOptions(): SessionOptions {
+  const password = process.env.SESSION_SECRET;
+  if (!password && process.env.NODE_ENV === "production") {
+    throw new Error("SESSION_SECRET must be configured in production");
+  }
+
+  return {
+    password: password || "local-development-secret-change-me-32chars",
+    cookieName: "notulen_session",
+    cookieOptions: {
+      secure: process.env.NODE_ENV === "production",
+      httpOnly: true,
+      sameSite: "lax",
+      maxAge: 60 * 60 * 24 * 30, // 30 days
+    },
+  };
+}
+
+// Middleware needs a stable options export, while the secret must be checked only at request time.
 export const sessionOptions: SessionOptions = {
-  password:
-    process.env.SESSION_SECRET ||
-    (process.env.NODE_ENV === "production"
-      ? (() => {
-          throw new Error("SESSION_SECRET must be configured in production");
-        })()
-      : "local-development-secret-change-me-32chars"),
+  get password() {
+    return getSessionOptions().password;
+  },
   cookieName: "notulen_session",
   cookieOptions: {
-    secure: process.env.NODE_ENV === "production",
+    get secure() {
+      return process.env.NODE_ENV === "production";
+    },
     httpOnly: true,
     sameSite: "lax",
-    maxAge: 60 * 60 * 24 * 30, // 30 days
+    maxAge: 60 * 60 * 24 * 30,
   },
 };
 
 export async function getSession() {
   const cookieStore = await cookies();
-  return getIronSession<SessionData>(cookieStore, sessionOptions);
+  return getIronSession<SessionData>(cookieStore, getSessionOptions());
 }
 
 export async function requireAuth() {
