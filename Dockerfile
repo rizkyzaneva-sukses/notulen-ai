@@ -3,6 +3,9 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json* ./
 COPY prisma ./prisma
+# python3 isn't installed in this stage; skip youtube-dl-exec's preinstall check here —
+# the runner stage (where yt-dlp actually runs) has python3 installed below
+ENV YOUTUBE_DL_SKIP_PYTHON_CHECK=1
 RUN npm ci
 
 FROM node:22-bookworm-slim AS builder
