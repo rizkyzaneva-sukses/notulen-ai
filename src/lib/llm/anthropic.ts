@@ -38,7 +38,7 @@ function normalizeMindMap(node: unknown, fallbackLabel: string): MindMapNode {
   };
 }
 
-function normalizeResult(data: unknown, model: string): LlmSummaryResult {
+function normalizeResult(data: unknown): LlmSummaryResult {
   const d = (data || {}) as Record<string, unknown>;
   const keyPoints = Array.isArray(d.keyPoints)
     ? d.keyPoints.map(String)
@@ -120,7 +120,7 @@ export class AnthropicLlmProvider implements LlmProvider {
         content?: Array<{ type: string; text?: string }>;
       };
       const text = data.content?.find((c) => c.type === "text")?.text || "";
-      return normalizeResult(extractJson(text), this.model);
+      return normalizeResult(extractJson(text));
     }
 
     // OpenAI-compatible chat completions
@@ -152,6 +152,6 @@ export class AnthropicLlmProvider implements LlmProvider {
       choices?: Array<{ message?: { content?: string } }>;
     };
     const text = data.choices?.[0]?.message?.content || "";
-    return normalizeResult(extractJson(text), this.model);
+    return normalizeResult(extractJson(text));
   }
 }

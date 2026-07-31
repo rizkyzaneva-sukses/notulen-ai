@@ -79,12 +79,13 @@ async function handleJson(req: NextRequest) {
   }
 
   const detected = detectSourceFromUrl(url);
-  const sourceType: SourceType =
-    sourceTypeOverride ||
-    detected ||
-    (() => {
-      throw new Error("Sumber URL tidak dikenali (YouTube/Loom/Zoom/Meet/Teams)");
-    })();
+  if (!detected || (sourceTypeOverride && sourceTypeOverride !== detected)) {
+    return NextResponse.json(
+      { error: "Jenis sumber tidak cocok dengan URL" },
+      { status: 400 }
+    );
+  }
+  const sourceType: SourceType = detected;
 
   if (sourceType === "MEETING_BOT" && !process.env.RECALL_AI_API_KEY) {
     return NextResponse.json(
@@ -115,7 +116,16 @@ async function handleJson(req: NextRequest) {
     },
   });
 
-  await enqueueSessionProcess(session.id);
+  try {
+    await enqueueSessionProcess(session.id);
+  } catch (err) {
+    await prisma.session.delete({ where: { id: session.id } }).catch(() => {});
+    const message = err instanceof Error ? err.message : String(err);
+    return NextResponse.json(
+      { error: `Queue tidak tersedia: ${message}` },
+      { status: 503 }
+    );
+  }
 
   return NextResponse.json({ session }, { status: 201 });
 }
@@ -165,7 +175,16 @@ async function handleUpload(req: NextRequest) {
     },
   });
 
-  await enqueueSessionProcess(session.id);
+  try {
+    await enqueueSessionProcess(session.id);
+  } catch (err) {
+    await prisma.session.delete({ where: { id: session.id } }).catch(() => {});
+    const message = err instanceof Error ? err.message : String(err);
+    return NextResponse.json(
+      { error: `Queue tidak tersedia: ${message}` },
+      { status: 503 }
+    );
+  }
 
   return NextResponse.json({ session }, { status: 201 });
 }

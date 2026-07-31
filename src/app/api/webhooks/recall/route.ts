@@ -6,6 +6,15 @@ import { enqueueSessionProcess } from "@/lib/queue";
  * Recall.ai webhook — re-trigger processing when bot finishes (Fase 2)
  */
 export async function POST(req: NextRequest) {
+  const configuredSecret = process.env.RECALL_WEBHOOK_SECRET;
+  const receivedSecret = req.headers.get("x-recall-webhook-secret");
+  if (
+    (process.env.NODE_ENV === "production" && !configuredSecret) ||
+    (configuredSecret && receivedSecret !== configuredSecret)
+  ) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   const body = await req.json().catch(() => ({}));
   console.log("[webhook/recall]", JSON.stringify(body).slice(0, 500));
 

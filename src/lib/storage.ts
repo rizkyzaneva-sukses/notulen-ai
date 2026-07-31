@@ -1,4 +1,4 @@
-import { mkdir, writeFile, unlink, readFile, access } from "fs/promises";
+import { mkdir, writeFile, unlink, readFile, access, rm } from "fs/promises";
 import path from "path";
 import { constants } from "fs";
 
@@ -39,6 +39,15 @@ export async function deleteUpload(filePath: string): Promise<void> {
   } catch {
     // ignore missing
   }
+}
+
+export async function deleteSessionFiles(sessionId: string): Promise<void> {
+  const root = path.resolve(getUploadRoot());
+  const dir = path.resolve(getSessionDir(sessionId));
+  if (!dir.startsWith(`${root}${path.sep}`)) {
+    throw new Error("Invalid session storage path");
+  }
+  await rm(dir, { recursive: true, force: true });
 }
 
 export function toPublicPath(absolutePath: string | null | undefined): string | null {

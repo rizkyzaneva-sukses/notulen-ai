@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import type { Category } from "@prisma/client";
 import { CATEGORIES } from "@/lib/utils";
+import { deleteSessionFiles } from "@/lib/storage";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -69,6 +70,9 @@ export async function DELETE(_req: NextRequest, ctx: Ctx) {
       return NextResponse.json({ error: "Sesi tidak ditemukan" }, { status: 404 });
     }
     await prisma.session.delete({ where: { id } });
+    await deleteSessionFiles(id).catch((error) => {
+      console.error(`Failed to remove files for session ${id}:`, error);
+    });
     return NextResponse.json({ ok: true });
   } catch {
     return NextResponse.json({ error: "Gagal menghapus" }, { status: 500 });

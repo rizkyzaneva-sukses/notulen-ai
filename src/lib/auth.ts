@@ -6,7 +6,13 @@ export interface SessionData {
 }
 
 export const sessionOptions: SessionOptions = {
-  password: process.env.SESSION_SECRET || "complex_password_at_least_32_characters_long",
+  password:
+    process.env.SESSION_SECRET ||
+    (process.env.NODE_ENV === "production"
+      ? (() => {
+          throw new Error("SESSION_SECRET must be configured in production");
+        })()
+      : "local-development-secret-change-me-32chars"),
   cookieName: "notulen_session",
   cookieOptions: {
     secure: process.env.NODE_ENV === "production",
@@ -30,6 +36,12 @@ export async function requireAuth() {
 }
 
 export function verifyPin(pin: string): boolean {
-  const adminPin = process.env.ADMIN_PIN || "1234";
+  const adminPin =
+    process.env.ADMIN_PIN ||
+    (process.env.NODE_ENV === "production"
+      ? (() => {
+          throw new Error("ADMIN_PIN must be configured in production");
+        })()
+      : "1234");
   return pin === adminPin;
 }

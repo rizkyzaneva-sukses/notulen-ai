@@ -23,7 +23,6 @@ export interface MindMapNodeData {
 
 function layoutTree(
   root: MindMapNodeData,
-  x = 0,
   y = 0,
   levelGap = 220,
   siblingGap = 90
