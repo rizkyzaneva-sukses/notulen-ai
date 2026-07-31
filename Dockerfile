@@ -24,7 +24,8 @@ COPY --from=builder /app/public ./public
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/.next/standalone ./.next/standalone
+COPY --from=builder /app/.next/static ./.next/standalone/.next/static
 COPY --from=builder /app/worker ./worker
 COPY --from=builder /app/src ./src
 COPY --from=builder /app/tsconfig.json ./tsconfig.json
@@ -37,4 +38,4 @@ ENV PORT=3000
 ENV UPLOAD_DIR=/app/uploads
 
 # default: web; override with npm run worker for worker service
-CMD ["sh", "-c", "npx prisma db push --skip-generate && npm start"]
+CMD ["sh", "-c", "npx prisma db push --skip-generate && node .next/standalone/server.js"]
