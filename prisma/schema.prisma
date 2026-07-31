@@ -1,0 +1,140 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SourceType {
+  UPLOAD
+  YOUTUBE
+  LOOM
+  MEETING_BOT
+  IN_APP_RECORD
+}
+
+enum SessionStatus {
+  QUEUED
+  TRANSCRIBING
+  TRANSCRIBED
+  SUMMARIZING
+  DONE
+  FAILED
+}
+
+enum Category {
+  PEBISNIS
+  SUAMI
+  ANAK
+  AYAH
+  INVESTOR
+}
+
+model Session {
+  id              String        @id @default(cuid())
+  title           String
+  sourceType      SourceType    @map("source_type")
+  sourceUrl       String?       @map("source_url")
+  filePath        String?       @map("file_path")
+  fileName        String?       @map("file_name")
+  mimeType        String?       @map("mime_type")
+  durationSeconds Int?          @map("duration_seconds")
+  status          SessionStatus @default(QUEUED)
+  category        Category?
+  errorMessage    String?       @map("error_message") @db.Text
+  thumbnailUrl    String?       @map("thumbnail_url")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  transcript  Transcript?
+  summary     Summary?
+  actionItems ActionItem[]
+  mindMap     MindMap?
+  speakers    Speaker[]
+
+  @@index([status])
+  @@index([category])
+  @@index([createdAt])
+  @@map("sessions")
+}
+
+model Transcript {
+  id            String   @id @default(cuid())
+  sessionId     String   @unique @map("session_id")
+  rawText       String   @map("raw_text") @db.Text
+  segments      Json
+  language      String?
+  sttProvider   String   @map("stt_provider")
+  confidenceAvg Float?   @map("confidence_avg")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@map("transcripts")
+}
+
+model Speaker {
+  id          String  @id @default(cuid())
+  sessionId   String  @map("session_id")
+  speakerCode String  @map("speaker_code")
+  displayName String  @map("display_name")
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, speakerCode])
+  @@map("speakers")
+}
+
+model Summary {
+  id                String   @id @default(cuid())
+  sessionId         String   @unique @map("session_id")
+  executiveSummary  String   @map("executive_summary") @db.Text
+  keyPoints         Json     @map("key_points")
+  decisions         Json
+  llmProvider       String   @map("llm_provider")
+  llmModel          String   @map("llm_model")
+  generatedAt       DateTime @default(now()) @map("generated_at")
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@map("summaries")
+}
+
+model ActionItem {
+  id          String    @id @default(cuid())
+  sessionId   String    @map("session_id")
+  description String    @db.Text
+  owner       String?
+  dueDate     DateTime? @map("due_date") @db.Date
+  isDone      Boolean   @default(false) @map("is_done")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([isDone])
+  @@map("action_items")
+}
+
+model MindMap {
+  id          String   @id @default(cuid())
+  sessionId   String   @unique @map("session_id")
+  structure   Json
+  generatedAt DateTime @default(now()) @map("generated_at")
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@map("mind_maps")
+}
+
+model PushSubscription {
+  id        String   @id @default(cuid())
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("push_subscriptions")
+}
