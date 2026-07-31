@@ -1,7 +1,7 @@
 import { prisma } from "./db";
 import { getSttProvider } from "./stt";
 import { getLlmProvider } from "./llm";
-import { getYoutubeCaptions } from "./sources/youtube";
+import { getYoutubeCaptions, downloadYoutubeAudio } from "./sources/youtube";
 import { getLoomTranscript } from "./sources/loom";
 import {
   createRecallBot,
@@ -79,14 +79,25 @@ export async function processSession(sessionId: string): Promise<void> {
         speakers = ["Speaker A"];
         sttProvider = "youtube-captions";
       } else {
-        // fallback: need audio file — user should upload, or we mark needing STT file
-        if (!session.filePath) {
-          throw new Error(
-            "YouTube tanpa caption. Download audio manual lalu upload, atau sediakan file audio."
-          );
+        // fallback: no captions available — download the audio ourselves and run STT
+        let filePath = session.filePath;
+        if (!filePath) {
+          try {
+            const dir = await ensureSessionDir(sessionId);
+            filePath = await downloadYoutubeAudio(session.sourceUrl, dir);
+            await prisma.session.update({
+              where: { id: sessionId },
+              data: { filePath },
+            });
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            throw new Error(
+              `${message}. Silakan download audio manual lalu upload, atau sediakan file audio.`
+            );
+          }
         }
         const stt = getSttProvider();
-        const result = await stt.transcribe({ filePath: session.filePath });
+        const result = await stt.transcribe({ filePath });
         transcriptText = result.rawText;
         segments = result.segments;
         language = result.language;

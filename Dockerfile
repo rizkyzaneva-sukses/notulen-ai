@@ -17,7 +17,9 @@ FROM node:22-bookworm-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates && rm -rf /var/lib/apt/lists/*
+# python3: required to run the yt-dlp binary (YouTube audio fallback when no captions)
+# ffmpeg: lets yt-dlp remux/merge streams when a plain bestaudio format isn't available
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates python3 ffmpeg && rm -rf /var/lib/apt/lists/*
 RUN groupadd -r nodejs && useradd -r -g nodejs nextjs
 
 COPY --from=builder /app/public ./public

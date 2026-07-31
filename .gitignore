@@ -49,3 +49,4 @@ prisma/*.db-journal
 # local tools / cache
 .tools/
 .kilo/
+env di apps.txt
