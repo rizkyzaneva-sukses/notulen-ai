@@ -1,7 +1,11 @@
 import { prisma } from "./db";
 import { getSttProvider } from "./stt";
 import { getLlmProvider } from "./llm";
-import { getYoutubeCaptions, downloadYoutubeAudio } from "./sources/youtube";
+import {
+  getYoutubeCaptions,
+  downloadYoutubeAudio,
+  type YoutubeCaptionResult,
+} from "./sources/youtube";
 import { getLoomTranscript } from "./sources/loom";
 import {
   createRecallBot,
@@ -68,8 +72,21 @@ export async function processSession(sessionId: string): Promise<void> {
     let sttProvider = "none";
 
     if (session.sourceType === "YOUTUBE" && session.sourceUrl) {
-      const captions = await getYoutubeCaptions(session.sourceUrl);
-      if (captions.hasCaptions && captions.text) {
+      // A caption failure must not end the job. yt-dlp reaches YouTube over a
+      // different path and often still succeeds when InnerTube is refused, so
+      // the error is recorded and the audio fallback below gets its turn.
+      let captions: YoutubeCaptionResult | null = null;
+      let captionError: string | null = null;
+      try {
+        captions = await getYoutubeCaptions(session.sourceUrl);
+      } catch (err) {
+        captionError = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `[process] caption YouTube gagal (${captionError}); fallback ke unduh audio`
+        );
+      }
+
+      if (captions?.hasCaptions && captions.text) {
         transcriptText = captions.text;
         // captions carry real timings; only fall back to estimates if absent
         segments = captions.segments.length
@@ -92,7 +109,9 @@ export async function processSession(sessionId: string): Promise<void> {
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             throw new Error(
-              `${message}. Silakan download audio manual lalu upload, atau sediakan file audio.`
+              captionError
+                ? `${captionError} Fallback unduh audio juga gagal: ${message}. Silakan download audio manual lalu upload.`
+                : `${message}. Silakan download audio manual lalu upload, atau sediakan file audio.`
             );
           }
         }

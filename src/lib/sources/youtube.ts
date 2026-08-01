@@ -24,7 +24,45 @@ const INNERTUBE_URL = "https://www.youtube.com/youtubei/v1/player";
 const INNERTUBE_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8";
 const ANDROID_CLIENT_VERSION = "20.10.38";
 const ANDROID_USER_AGENT = `com.google.android.youtube/${ANDROID_CLIENT_VERSION} (Linux; U; Android 11) gzip`;
+const IOS_CLIENT_VERSION = "20.10.4";
+const IOS_USER_AGENT = `com.google.ios.youtube/${IOS_CLIENT_VERSION} (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X)`;
 const REQUEST_TIMEOUT_MS = 20_000;
+
+interface InnertubeClient {
+  label: string;
+  userAgent: string;
+  client: Record<string, unknown>;
+}
+
+/**
+ * Tried in order until one answers OK. YouTube rejects clients unevenly —
+ * a datacenter IP that gets LOGIN_REQUIRED on ANDROID sometimes still passes
+ * on IOS, so a second attempt is worth the extra round trip.
+ *
+ * MWEB/WEB are deliberately absent: they now require a PoToken and answer
+ * UNPLAYABLE even from a clean residential IP. ANDROID_VR and TVHTML5 answer
+ * LOGIN_REQUIRED under the same conditions.
+ */
+const INNERTUBE_CLIENTS: InnertubeClient[] = [
+  {
+    label: "ANDROID",
+    userAgent: ANDROID_USER_AGENT,
+    client: {
+      clientName: "ANDROID",
+      clientVersion: ANDROID_CLIENT_VERSION,
+      androidSdkVersion: 30,
+    },
+  },
+  {
+    label: "IOS",
+    userAgent: IOS_USER_AGENT,
+    client: {
+      clientName: "IOS",
+      clientVersion: IOS_CLIENT_VERSION,
+      deviceModel: "iPhone16,2",
+    },
+  },
+];
 
 /** Language preference, best first. Matches exact code or `code-REGION`. */
 const LANGUAGE_PREFERENCE = ["id", "en"];
@@ -127,10 +165,27 @@ function pickTrack(tracks: CaptionTrack[]): CaptionTrack | null {
   return [...tracks].sort((a, b) => rank(a) - rank(b))[0] || null;
 }
 
+/**
+ * Raised when no InnerTube client could reach the video. `detail` keeps the
+ * per-client status/reason so a bot block ("Sign in to confirm you're not a
+ * bot") stays distinguishable from a genuinely private video — the two share
+ * the LOGIN_REQUIRED status but need completely different fixes.
+ */
+export class YoutubeAccessError extends Error {
+  readonly detail: string;
+  constructor(message: string, detail: string) {
+    super(detail ? `${message} [${detail}]` : message);
+    this.name = "YoutubeAccessError";
+    this.detail = detail;
+  }
+}
+
 function playabilityError(status: string, reason?: string): string {
   switch (status) {
     case "LOGIN_REQUIRED":
-      return "Video YouTube privat atau perlu login. Gunakan link publik.";
+      // Not necessarily private: YouTube returns this to unattested clients
+      // and to datacenter IPs it suspects of automation.
+      return "YouTube menolak akses ke video ini. Video privat, atau IP server diblokir YouTube.";
     case "AGE_VERIFICATION_REQUIRED":
     case "CONTENT_CHECK_REQUIRED":
       return "Video YouTube dibatasi umur, caption tidak bisa diambil otomatis.";
@@ -143,38 +198,45 @@ function playabilityError(status: string, reason?: string): string {
   }
 }
 
-async function fetchPlayerResponse(videoId: string): Promise<{
-  captionTracks: CaptionTrack[];
-}> {
+interface PlayerAttempt {
+  captionTracks?: CaptionTrack[];
+  /** Human-readable failure for this client, e.g. `ANDROID: LOGIN_REQUIRED`. */
+  failure?: string;
+  /** Message shown to the user if every client fails the same way. */
+  userMessage?: string;
+}
+
+async function fetchPlayerResponseWith(
+  videoId: string,
+  entry: InnertubeClient
+): Promise<PlayerAttempt> {
   let res: Response;
   try {
     res = await fetch(`${INNERTUBE_URL}?key=${INNERTUBE_KEY}`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "user-agent": ANDROID_USER_AGENT,
+        "user-agent": entry.userAgent,
       },
       body: JSON.stringify({
         videoId,
-        context: {
-          client: {
-            clientName: "ANDROID",
-            clientVersion: ANDROID_CLIENT_VERSION,
-            androidSdkVersion: 30,
-            hl: "id",
-            gl: "ID",
-          },
-        },
+        context: { client: { ...entry.client, hl: "id", gl: "ID" } },
       }),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Gagal menghubungi YouTube: ${message}`);
+    return {
+      failure: `${entry.label}: ${message}`,
+      userMessage: `Gagal menghubungi YouTube: ${message}`,
+    };
   }
 
   if (!res.ok) {
-    throw new Error(`Gagal mengakses YouTube (${res.status})`);
+    return {
+      failure: `${entry.label}: HTTP ${res.status}`,
+      userMessage: `Gagal mengakses YouTube (${res.status})`,
+    };
   }
 
   const data = (await res.json()) as {
@@ -185,13 +247,43 @@ async function fetchPlayerResponse(videoId: string): Promise<{
   };
 
   const status = data.playabilityStatus?.status;
+  const reason = data.playabilityStatus?.reason;
   if (status && status !== "OK") {
-    throw new Error(playabilityError(status, data.playabilityStatus?.reason));
+    return {
+      failure: `${entry.label}: ${status}${reason ? ` (${reason})` : ""}`,
+      userMessage: playabilityError(status, reason),
+    };
   }
 
   const captionTracks =
     data.captions?.playerCaptionsTracklistRenderer?.captionTracks ?? [];
   return { captionTracks: captionTracks.filter((t) => t?.baseUrl) };
+}
+
+async function fetchPlayerResponse(videoId: string): Promise<{
+  captionTracks: CaptionTrack[];
+}> {
+  const failures: string[] = [];
+  let userMessage = "Video YouTube tidak bisa diakses.";
+
+  for (const entry of INNERTUBE_CLIENTS) {
+    const attempt = await fetchPlayerResponseWith(videoId, entry);
+    if (attempt.captionTracks) {
+      if (failures.length > 0) {
+        console.warn(
+          `[youtube] ${entry.label} berhasil setelah gagal di: ${failures.join("; ")}`
+        );
+      }
+      return { captionTracks: attempt.captionTracks };
+    }
+    failures.push(attempt.failure!);
+    // keep the first client's wording: it is the most representative
+    if (failures.length === 1 && attempt.userMessage) {
+      userMessage = attempt.userMessage;
+    }
+  }
+
+  throw new YoutubeAccessError(userMessage, failures.join("; "));
 }
 
 export async function getYoutubeCaptions(url: string): Promise<YoutubeCaptionResult> {
