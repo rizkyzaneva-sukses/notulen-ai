@@ -79,6 +79,26 @@ interface CookieHandle {
 }
 
 /**
+ * yt-dlp has deprecated extraction without a JS runtime — without one it
+ * cannot decipher signatures and reports "Requested format is not available".
+ * The runtime image is node:22, so the interpreter is already on PATH and no
+ * extra dependency (Deno) is needed.
+ */
+const YT_DLP_JS_RUNTIME = { jsRuntimes: "node" } as const;
+
+/**
+ * yt-dlp still resolves a format under --skip-download, so a video whose
+ * formats cannot be extracted aborts the subtitle fetch as well. Subtitles do
+ * not depend on formats, so let it carry on regardless.
+ *
+ * Absent from youtube-dl-exec's typings; dargs forwards any key as a CLI flag,
+ * so this reaches yt-dlp as --ignore-no-formats-error.
+ */
+const YT_DLP_IGNORE_NO_FORMATS: { ignoreNoFormatsError: boolean } = {
+  ignoreNoFormatsError: true,
+};
+
+/**
  * Optional `--cookies` file for yt-dlp. YouTube blocks datacenter IPs with
  * "Sign in to confirm you're not a bot"; a logged-in cookie jar gets past it.
  * Unset means yt-dlp runs anonymously, exactly as before.
@@ -424,6 +444,8 @@ export async function getYoutubeCaptionsViaYtDlp(
       noPlaylist: true,
       noCheckCertificates: true,
       noWarnings: true,
+      ...YT_DLP_JS_RUNTIME,
+      ...YT_DLP_IGNORE_NO_FORMATS,
       ...cookies.flags,
     });
   } catch (err) {
@@ -517,6 +539,7 @@ export async function downloadYoutubeAudio(
       noCheckCertificates: true,
       noWarnings: true,
       maxFilesize: `${maxMb}M`,
+      ...YT_DLP_JS_RUNTIME,
       ...cookies.flags,
     });
   } catch (err) {
