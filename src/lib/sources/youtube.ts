@@ -5,6 +5,8 @@ export interface YoutubeCaptionResult {
   language?: string;
   hasCaptions: boolean;
   segments: TranscriptSegment[];
+  /** Which route produced these captions — surfaced as the STT provider. */
+  source?: "innertube" | "yt-dlp";
 }
 
 interface CaptionTrack {
@@ -68,7 +70,48 @@ const INNERTUBE_CLIENTS: InnertubeClient[] = [
 const LANGUAGE_PREFERENCE = ["id", "en"];
 
 const YT_AUDIO_PREFIX = "yt-audio-";
+const YT_SUB_PREFIX = "yt-sub-";
 const VIDEO_ID_RE = /^[A-Za-z0-9_-]{6,20}$/;
+
+interface CookieHandle {
+  flags: { cookies?: string };
+  cleanup: () => Promise<void>;
+}
+
+/**
+ * Optional `--cookies` file for yt-dlp. YouTube blocks datacenter IPs with
+ * "Sign in to confirm you're not a bot"; a logged-in cookie jar gets past it.
+ * Unset means yt-dlp runs anonymously, exactly as before.
+ *
+ * yt-dlp saves the jar back to disk when it finishes, which fails on the
+ * read-only file mounts that panels typically use — so it is handed a
+ * throwaway copy and the original is never written to.
+ */
+async function ytDlpCookies(): Promise<CookieHandle> {
+  const file = process.env.YOUTUBE_COOKIES_FILE?.trim();
+  if (!file) return { flags: {}, cleanup: async () => {} };
+
+  try {
+    const { copyFile, mkdtemp, rm } = await import("fs/promises");
+    const { tmpdir } = await import("os");
+    const nodePath = await import("path");
+    const dir = await mkdtemp(nodePath.join(tmpdir(), "yt-cookies-"));
+    const copy = nodePath.join(dir, "cookies.txt");
+    await copyFile(file, copy);
+    return {
+      flags: { cookies: copy },
+      cleanup: async () => {
+        await rm(dir, { recursive: true, force: true }).catch(() => {});
+      },
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(
+      `[youtube] gagal menyalin cookies (${message}); pakai file aslinya`
+    );
+    return { flags: { cookies: file }, cleanup: async () => {} };
+  }
+}
 
 function extractVideoId(url: string): string | null {
   try {
@@ -336,6 +379,109 @@ export async function getYoutubeCaptions(url: string): Promise<YoutubeCaptionRes
     language: track.languageCode,
     hasCaptions: true,
     segments,
+    source: "innertube",
+  };
+}
+
+/**
+ * Second caption route, used when InnerTube is refused. yt-dlp downloads the
+ * subtitle track directly — with `YOUTUBE_COOKIES_FILE` set it clears the bot
+ * check that blocks the API. Far cheaper than the audio fallback below: no
+ * download, no STT minutes billed.
+ *
+ * srv3 is requested specifically because `parseCaptionXml` already reads it
+ * with real timings; ttml/vtt would need a separate parser to avoid silently
+ * flattening every timestamp to zero.
+ */
+export async function getYoutubeCaptionsViaYtDlp(
+  url: string,
+  destDir: string
+): Promise<YoutubeCaptionResult> {
+  const videoId = extractVideoId(url);
+  if (!videoId) {
+    throw new Error("URL YouTube tidak valid");
+  }
+
+  const { readdir, readFile, unlink } = await import("fs/promises");
+  const path = await import("path");
+  const { default: youtubedl } = await import("youtube-dl-exec");
+
+  const outputTemplate = path.join(destDir, `${YT_SUB_PREFIX}${videoId}.%(ext)s`);
+  const safeUrl = `https://www.youtube.com/watch?v=${videoId}`;
+
+  const cookies = await ytDlpCookies();
+  let downloadError: string | null = null;
+  try {
+    await youtubedl(safeUrl, {
+      skipDownload: true,
+      // legacy flag spellings — youtube-dl-exec types them this way, and
+      // yt-dlp still accepts them as aliases of --write-subs/--sub-langs
+      writeSub: true,
+      writeAutoSub: true,
+      subLang: LANGUAGE_PREFERENCE.join(","),
+      subFormat: "srv3",
+      output: outputTemplate,
+      noPlaylist: true,
+      noCheckCertificates: true,
+      noWarnings: true,
+      ...cookies.flags,
+    });
+  } catch (err) {
+    // Partial success is normal: yt-dlp fetches one language per request, so
+    // it can save `id` and then hit a 429 on `en` and exit non-zero. Whatever
+    // reached disk is still usable, so this only becomes fatal if the scan
+    // below turns up nothing.
+    downloadError = err instanceof Error ? err.message : String(err);
+  } finally {
+    await cookies.cleanup();
+  }
+
+  const prefix = `${YT_SUB_PREFIX}${videoId}.`;
+  const files = (await readdir(destDir)).filter(
+    (f) => f.startsWith(prefix) && f.endsWith(".srv3")
+  );
+  if (files.length === 0) {
+    if (downloadError) {
+      throw new Error(`Gagal mengambil caption via yt-dlp: ${downloadError}`);
+    }
+    return { text: "", hasCaptions: false, segments: [] };
+  }
+  if (downloadError) {
+    console.warn(
+      `[youtube] yt-dlp sebagian gagal (${downloadError}); memakai subtitle yang berhasil terunduh`
+    );
+  }
+
+  // filename is `yt-sub-<id>.<lang>.srv3`; apply the same language preference
+  const langOf = (f: string) => f.slice(prefix.length).replace(/\.srv3$/, "");
+  const best = [...files].sort((a, b) => {
+    const rank = (f: string) => {
+      const lang = langOf(f).toLowerCase();
+      const i = LANGUAGE_PREFERENCE.findIndex(
+        (p) => lang === p || lang.startsWith(`${p}-`)
+      );
+      return i < 0 ? LANGUAGE_PREFERENCE.length : i;
+    };
+    return rank(a) - rank(b);
+  })[0];
+
+  const xml = await readFile(path.join(destDir, best), "utf8");
+  await Promise.all(
+    files.map((f) => unlink(path.join(destDir, f)).catch(() => {}))
+  );
+
+  const segments = parseCaptionXml(xml);
+  const text = segments.map((s) => s.text).join(" ").trim();
+  if (text.length <= 20) {
+    return { text: "", hasCaptions: false, segments: [] };
+  }
+
+  return {
+    text,
+    language: langOf(best),
+    hasCaptions: true,
+    segments,
+    source: "yt-dlp",
   };
 }
 
@@ -362,6 +508,7 @@ export async function downloadYoutubeAudio(
   // the raw user-supplied string to the spawned yt-dlp process
   const safeUrl = `https://www.youtube.com/watch?v=${videoId}`;
 
+  const cookies = await ytDlpCookies();
   try {
     await youtubedl(safeUrl, {
       format: "bestaudio/best",
@@ -370,10 +517,13 @@ export async function downloadYoutubeAudio(
       noCheckCertificates: true,
       noWarnings: true,
       maxFilesize: `${maxMb}M`,
+      ...cookies.flags,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`Gagal mengunduh audio dari YouTube: ${message}`);
+  } finally {
+    await cookies.cleanup();
   }
 
   const files = await readdir(destDir);

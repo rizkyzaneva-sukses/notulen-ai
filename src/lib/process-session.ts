@@ -3,6 +3,7 @@ import { getSttProvider } from "./stt";
 import { getLlmProvider } from "./llm";
 import {
   getYoutubeCaptions,
+  getYoutubeCaptionsViaYtDlp,
   downloadYoutubeAudio,
   type YoutubeCaptionResult,
 } from "./sources/youtube";
@@ -86,6 +87,28 @@ export async function processSession(sessionId: string): Promise<void> {
         );
       }
 
+      // Second caption route before paying for STT: yt-dlp fetches the
+      // subtitle track directly, and with cookies configured it gets past the
+      // bot check that refuses InnerTube.
+      let subtitleError: string | null = null;
+      if (!(captions?.hasCaptions && captions.text)) {
+        try {
+          const dir = await ensureSessionDir(sessionId);
+          const viaYtDlp = await getYoutubeCaptionsViaYtDlp(
+            session.sourceUrl,
+            dir
+          );
+          if (viaYtDlp.hasCaptions && viaYtDlp.text) {
+            captions = viaYtDlp;
+          }
+        } catch (err) {
+          subtitleError = err instanceof Error ? err.message : String(err);
+          console.warn(
+            `[process] caption via yt-dlp gagal (${subtitleError}); fallback ke unduh audio`
+          );
+        }
+      }
+
       if (captions?.hasCaptions && captions.text) {
         transcriptText = captions.text;
         // captions carry real timings; only fall back to estimates if absent
@@ -94,7 +117,10 @@ export async function processSession(sessionId: string): Promise<void> {
           : segmentsFromPlainText(captions.text);
         language = captions.language;
         speakers = ["Speaker A"];
-        sttProvider = "youtube-captions";
+        sttProvider =
+          captions.source === "yt-dlp"
+            ? "youtube-captions-ytdlp"
+            : "youtube-captions";
       } else {
         // fallback: no captions available — download the audio ourselves and run STT
         let filePath = session.filePath;
@@ -108,11 +134,22 @@ export async function processSession(sessionId: string): Promise<void> {
             });
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
-            throw new Error(
-              captionError
-                ? `${captionError} Fallback unduh audio juga gagal: ${message}. Silakan download audio manual lalu upload.`
-                : `${message}. Silakan download audio manual lalu upload, atau sediakan file audio.`
+            // All three routes failed: report each one, clipped, so the cause
+            // is visible in the UI without becoming a wall of text.
+            const clip = (s: string) =>
+              s.length > 300 ? `${s.slice(0, 300)}…` : s;
+            const parts = [
+              captionError && `Caption API — ${clip(captionError)}`,
+              subtitleError && `Caption yt-dlp — ${clip(subtitleError)}`,
+              `Unduh audio — ${clip(message)}`,
+            ].filter((p): p is string => Boolean(p));
+            const botBlocked = /not a bot|bukan bot/i.test(
+              `${captionError ?? ""} ${subtitleError ?? ""} ${message}`
             );
+            const hint = botBlocked
+              ? "YouTube memblokir IP server ini. Isi YOUTUBE_COOKIES_FILE, atau download audio manual lalu upload."
+              : "Silakan download audio manual lalu upload, atau sediakan file audio.";
+            throw new Error(`${parts.join(" | ")}. ${hint}`);
           }
         }
         const stt = getSttProvider();
